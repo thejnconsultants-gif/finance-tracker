@@ -80,26 +80,6 @@ def get_financial_year(date):
     if date.month >= 4: return f"FY {y}-{str(y+1)[-2:]}"
     else: return f"FY {y-1}-{str(y)[-2:]}"
 
-def calc_xirr(cash_flows):
-    try:
-        cash_flows = [cf for cf in cash_flows if cf[1] != 0]
-        if len(cash_flows) < 2: return 0.0 
-        cash_flows = sorted(cash_flows, key=lambda x: x[0])
-        t0 = cash_flows[0][0]
-        if cash_flows[0][0] == cash_flows[-1][0]: return 0.0
-        def xnpv(rate): 
-            if rate <= -1.0: return float('inf')
-            return sum([cf[1] / (1.0 + rate)**((cf[0] - t0).days / 365.0) for cf in cash_flows])
-        low = -0.9999; high = 100.0  
-        if xnpv(low) > 0 and xnpv(high) > 0: return 0.0 
-        for _ in range(50):
-            mid = (low + high) / 2.0
-            if abs(xnpv(mid)) < 0.0001: return mid
-            elif xnpv(mid) > 0: low = mid
-            else: high = mid
-        return (low + high) / 2.0
-    except: return 0.0
-
 # ==========================================
 # 3. DATA LOADER (CLOUD SMART EDITION)
 # ==========================================
@@ -143,23 +123,27 @@ def load_data():
         try:
             ws = sh.worksheet(worksheet_name)
             data = ws.get_all_records()
+            # If sheet is empty or only has headers, return empty DF with correct columns
+            if not data:
+                return pd.DataFrame()
             return pd.DataFrame(data)
         except: return pd.DataFrame()
 
     df = get_df('Budget Tracking')
     
-    # --- EMPTY SHEET SAFETY MECHANISM ---
-    # If the sheet is empty or headers are missing, create dummy columns so the app doesn't crash.
+    # --- SAFETY: Handle Empty Sheets ---
     if df.empty or 'Date' not in df.columns:
+        # Create a dummy DataFrame so the app doesn't crash on 'KeyError: FY'
         df = pd.DataFrame(columns=['Date', 'Type', 'Category', 'Amount', 'Details', 'FY', 'Month', 'Year', 'Bank'])
     else:
-        # Standard processing if data exists
+        # Standard processing
         df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
         df = df.dropna(subset=['Date'])
-        df['Year'] = df['Date'].dt.year 
-        df['FY'] = df['Date'].apply(get_financial_year)
-        df['Month'] = df['Date'].dt.month_name()
-        df['Amount'] = pd.to_numeric(df['Amount'].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+        if not df.empty:
+            df['Year'] = df['Date'].dt.year 
+            df['FY'] = df['Date'].apply(get_financial_year)
+            df['Month'] = df['Date'].dt.month_name()
+            df['Amount'] = pd.to_numeric(df['Amount'].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
     
     budget_raw = get_df('Budget Planning')
     budget_melted = pd.DataFrame()
@@ -180,74 +164,6 @@ if not split_df.empty:
     split_users.update(split_df['Debtor'].dropna().astype(str).unique())
 if "Jaynik" in split_users: split_users.remove("Jaynik")
 split_users = sorted(list(split_users))
-
-# ==========================================
-# 3. GLOBAL DATA FETCHERS
-# ==========================================
-@st.cache_data(ttl=3600) 
-def fetch_amfi_data():
-    amfi_dict = {}; mf_dropdown_list = []
-    try:
-        url = "https://www.amfiindia.com/spages/NAVAll.txt"
-        response = requests.get(url, timeout=10)
-        for line in response.text.split('\n'):
-            parts = line.split(';')
-            if len(parts) >= 5 and parts[0].isdigit():
-                code = parts[0]; name = parts[3]
-                try: amfi_dict[code] = {'name': name, 'nav': float(parts[4])}; mf_dropdown_list.append(f"{name} [{code}]")
-                except: pass
-    except: pass
-    mf_dropdown_list.sort(); return amfi_dict, mf_dropdown_list
-
-@st.cache_data(ttl=86400) 
-def fetch_nse_data():
-    nse_dict = {}; nse_dropdown_list = []
-    try:
-        url = "https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv"
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        response = requests.get(url, headers=headers, timeout=10)
-        if response.status_code == 200:
-            df_nse = pd.read_csv(io.StringIO(response.text))
-            for _, row in df_nse.iterrows():
-                symbol = str(row['SYMBOL']).strip(); name = str(row['NAME OF COMPANY']).strip().title()
-                nse_dict[symbol] = name; nse_dropdown_list.append(f"{name} [{symbol}]")
-    except: pass
-    etf_list = {"NIFTYBEES": "Nippon India Nifty 50 ETF", "BANKBEES": "Nippon India Bank ETF"}
-    for sym, name in etf_list.items(): nse_dict[sym] = name; nse_dropdown_list.append(f"⭐ {name} [{sym}]") 
-    nse_dropdown_list.sort(); return nse_dict, nse_dropdown_list
-
-@st.cache_data(ttl=300) 
-def get_market_data(tickers, amfi_dict, nse_dict):
-    prices = {}; names = {}
-    if not HAS_YFINANCE: return prices, names
-    for t in tickers:
-        t_str = str(t)
-        if t_str in amfi_dict: prices[t_str] = amfi_dict[t_str]['nav']; names[t_str] = amfi_dict[t_str]['name']
-        else:
-            clean_ticker = t_str.replace('.NS', '').replace('.BO', '')
-            if clean_ticker in nse_dict: names[t_str] = nse_dict[clean_ticker]
-            else: names[t_str] = t_str 
-            try:
-                search_ticker = t_str if "." in t_str or "-" in t_str or t_str.isdigit() else f"{t_str}.NS"
-                hist = yf.Ticker(search_ticker).history(period="1d")
-                prices[t_str] = float(hist['Close'].iloc[-1]) if not hist.empty else 0.0
-            except: prices[t_str] = 0.0
-    return prices, names
-
-@st.cache_data(ttl=86400)
-def fetch_benchmark_history(start_date):
-    if not HAS_YFINANCE: return pd.Series()
-    try:
-        start_date_str = pd.to_datetime(start_date).strftime('%Y-%m-%d')
-        nifty = yf.Ticker("^NSEI").history(start=start_date_str)
-        nifty.index = nifty.index.tz_localize(None).normalize()
-        idx = pd.date_range(start=nifty.index.min(), end=pd.Timestamp.today().normalize())
-        nifty = nifty.reindex(idx).ffill().bfill()
-        return nifty['Close']
-    except: return pd.Series()
-
-amfi_data_dict, amfi_dropdown = fetch_amfi_data()
-nse_data_dict, nse_dropdown = fetch_nse_data()
 
 # ==========================================
 # 4. SIDEBAR: NAVIGATION
@@ -320,7 +236,7 @@ if page == "🏠 Main Dashboard (I&E)":
             total_owed_by_me = pending_alerts['Split Amount'].sum()
             st.markdown(f"<div class='alert-box'><b>🔔 You have pending Splitwise settlements!</b> You owe ₹{total_owed_by_me:,.0f} to other members.</div>", unsafe_allow_html=True)
             
-    if filtered_df.empty: st.warning("⚠️ No transactions found for the selected Financial Year/Month.")
+    if filtered_df.empty: st.info("👋 Welcome! Your database is connected but empty. Use the sidebar to add your first transaction.")
 
     total_income = filtered_df[filtered_df['Type'] == 'Income']['Amount'].sum() if not filtered_df.empty else 0
     total_expenses = filtered_df[filtered_df['Type'] == 'Expenses']['Amount'].sum() if not filtered_df.empty else 0
@@ -380,7 +296,10 @@ elif page == "💰 Budget Planner":
         c1, c2 = st.columns(2)
         with c1:
             b_type = st.selectbox("Type", ["Income", "Expenses", "Savings"])
-            existing_cats = df[df['Type'] == b_type]['Category'].unique().tolist() if not df.empty else []
+            # SAFETY: Handle empty df
+            existing_cats = []
+            if not df.empty and 'Type' in df.columns:
+                 existing_cats = df[df['Type'] == b_type]['Category'].unique().tolist()
             b_cat = st.selectbox("Category", existing_cats + ["+ Add New..."])
             if b_cat == "+ Add New...": b_cat = st.text_input("New Category Name")
         with c2:
@@ -542,6 +461,9 @@ if page == "🏠 Main Dashboard (I&E)":
                 client = init_connection()
                 sh = client.open("Finance Tracker")
                 ws = sh.worksheet('Budget Tracking')
+                # Check if headers exist, if not, create them
+                if ws.row_count == 0 or not ws.row_values(1):
+                    ws.append_row(['ID', 'Date', 'Type', 'Category', 'Amount', 'Details'])
                 ws.append_row([str(datetime.datetime.now().timestamp()), str(new_date), new_type, new_cat, new_amt, new_note])
                 st.sidebar.success("Saved!")
                 st.cache_data.clear()
