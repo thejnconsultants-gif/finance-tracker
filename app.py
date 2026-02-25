@@ -155,13 +155,12 @@ def calc_xirr(cash_flows):
     except: return 0.0
 
 # ==========================================
-# 3. DATA LOADER (CLOUD CONNECTION & LOAD)
+# 3. DATA LOADER (CLOUD CONNECTION)
 # ==========================================
 import json
 import os 
 from oauth2client.service_account import ServiceAccountCredentials
 
-# --- PART A: THE CONNECTION ENGINE (Must be first) ---
 @st.cache_resource
 def init_connection():
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
@@ -170,11 +169,22 @@ def init_connection():
     if os.path.exists('credentials.json'):
         creds = ServiceAccountCredentials.from_json_keyfile_name('credentials.json', scope)
     
-    # CASE 2: Streamlit Cloud (Uses Secrets)
+    # CASE 2: Streamlit Cloud (Uses Secrets Dictionary)
     else:
-        # This matches the "Copy-Paste" method
-        json_str = st.secrets["gcp_service_account"]["key_content"]
-        creds_dict = json.loads(json_str)
+        # Create a dictionary directly from the secrets
+        # This bypasses the strict JSON parser entirely
+        creds_dict = {
+            "type": st.secrets["gcp_service_account"]["type"],
+            "project_id": st.secrets["gcp_service_account"]["project_id"],
+            "private_key_id": st.secrets["gcp_service_account"]["private_key_id"],
+            "private_key": st.secrets["gcp_service_account"]["private_key"],
+            "client_email": st.secrets["gcp_service_account"]["client_email"],
+            "client_id": st.secrets["gcp_service_account"]["client_id"],
+            "auth_uri": st.secrets["gcp_service_account"]["auth_uri"],
+            "token_uri": st.secrets["gcp_service_account"]["token_uri"],
+            "auth_provider_x509_cert_url": st.secrets["gcp_service_account"]["auth_provider_x509_cert_url"],
+            "client_x509_cert_url": st.secrets["gcp_service_account"]["client_x509_cert_url"]
+        }
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         
     client = gspread.authorize(creds)
@@ -1452,6 +1462,7 @@ if page == "🏠 Main Dashboard (I&E)":
             except Exception as e: 
 
                 st.sidebar.error(f"Error saving data: {e}. Is Excel open?")
+
 
 
 
