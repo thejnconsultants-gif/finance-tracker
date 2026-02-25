@@ -154,52 +154,57 @@ def calc_xirr(cash_flows):
         return (low + high) / 2.0
     except: return 0.0
 
-@st.cache_data(ttl=1)
+# ==========================================
+# 3. DATA LOADER (CLOUD ONLY - NO EXCEL)
+# ==========================================
+@st.cache_data(ttl=5)
 def load_data():
-    # 1. Load Actual Transactions
+    # 1. Connect to Cloud
     try:
-        df = pd.read_excel('Finance Tracker.xlsx', sheet_name='Budget Tracking', skiprows=9)
-        df.columns = df.columns.str.strip()
+        client = init_connection()
+        sh = client.open("Finance Tracker") # Must match your Google Sheet Name
+    except Exception as e:
+        st.error(f"🚨 Cloud Connection Error: {e}")
+        st.stop()
+
+    # 2. Helper to safely read a tab into a DataFrame
+    def get_df(worksheet_name):
+        try:
+            ws = sh.worksheet(worksheet_name)
+            data = ws.get_all_records()
+            return pd.DataFrame(data)
+        except: return pd.DataFrame()
+
+    # 3. Load Main Data
+    df = get_df('Budget Tracking')
+    
+    # 4. Clean Data
+    if not df.empty and 'Date' in df.columns:
+        df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
         df = df.dropna(subset=['Date'])
-        df['Date'] = pd.to_datetime(df['Date'])
         df['Year'] = df['Date'].dt.year 
-        df['FY'] = df['Date'].apply(get_financial_year)
+        df['FY'] = df['Date'].apply(get_financial_year) # Ensure get_financial_year helper exists above
         df['Month'] = df['Date'].dt.month_name()
         df['Amount'] = pd.to_numeric(df['Amount'], errors='coerce').fillna(0)
-        df['Bank'] = df['Details'].astype(str).str.extract(r'\[Bank:\s*([^,\]]+)')[0].fillna('Cash / Undefined')
-        df['Linked Goal'] = df['Details'].astype(str).str.extract(r'\[Goal:\s*([^,\]]+)')[0]
-    except Exception as e:
-        st.error(f"🚨 LOAD ERROR: {e}"); st.stop()
     
-    def load_sheet(name, cols):
-        try: return pd.read_excel('Finance Tracker.xlsx', sheet_name=name)
-        except: return pd.DataFrame(columns=cols)
-
-    cc_df = load_sheet('Credit Cards', ['Card Name', 'Total Limit', 'Statement Date', 'Target Spend (₹)'])
-    loan_df = load_sheet('Loans', ['Loan Name', 'Type', 'Principal', 'Interest Rate', 'Tenure', 'Start Date'])
-    assets_df = load_sheet('Physical Assets', ['Asset Name', 'Category', 'Estimated Value (₹)'])
-    split_df = load_sheet('Splitwise', ['ID', 'Date', 'Payer', 'Debtor', 'Total Amount', 'Split Amount', 'Description', 'Status'])
-    subs_df = load_sheet('Subscriptions', ['Service Name', 'Category', 'Billing Cycle', 'Amount (₹)', 'Next Due Date'])
-    goals_df = load_sheet('Goals', ['Goal Name', 'Target Amount', 'Target Date', 'Priority', 'Status'])
+    # 5. Load & Process Budget
+    budget_raw = get_df('Budget Planning')
+    budget_melted = pd.DataFrame()
+    if not budget_raw.empty:
+        # List of months to look for in columns
+        month_cols = ['April','May','June','July','August','September','October','November','December','January','February','March']
+        valid_months = [m for m in month_cols if m in budget_raw.columns]
         
-    # 2. Load Budget Matrix (Clean Month Columns Only)
-    # Expected: Type | Category | April | May | ... | March
-    budget_melted = pd.DataFrame(columns=['Type', 'Category', 'Amount', 'Month'])
-    budget_raw_df = pd.DataFrame()
-    try:
-        budget_raw_df = pd.read_excel('Finance Tracker.xlsx', sheet_name='Budget Planning')
-        # Ensure we only pick valid month columns that exist in the sheet
-        valid_months = [m for m in FY_MONTHS if m in budget_raw_df.columns]
-        
-        if 'Type' in budget_raw_df.columns and 'Category' in budget_raw_df.columns and valid_months:
-            # Transform to Melted format for Graphing
-            budget_melted = budget_raw_df.melt(id_vars=['Type', 'Category'], value_vars=valid_months, var_name='Month', value_name='Amount')
+        if valid_months:
+            budget_melted = budget_raw.melt(id_vars=['Category', 'Type'], value_vars=valid_months, var_name='Month', value_name='Amount')
             budget_melted['Amount'] = pd.to_numeric(budget_melted['Amount'], errors='coerce').fillna(0)
-    except Exception: pass
-    
-    return df, budget_melted, budget_raw_df, cc_df, loan_df, assets_df, split_df, subs_df, goals_df
 
-df, budget_df, budget_matrix_df, cc_df, loan_df, assets_df, split_df, subs_df, goals_df = load_data()
+    # 6. Return All DataFrames
+    return df, budget_melted, budget_raw, get_df('Credit Cards'), get_df('Loans'), get_df('Physical Assets'), get_df('Splitwise'), get_df('Subscriptions'), get_df('Goals')
+
+# Load the data into variables immediately after defining the function
+df, budget_df, budget_raw_df, cc_df, loan_df, assets_df, split_df, subs_df, goals_df = load_data()
+
 
 split_users = set(["Partner"])
 if not split_df.empty:
@@ -1429,4 +1434,5 @@ if page == "🏠 Main Dashboard (I&E)":
                 st.sidebar.success(f"✅ Saved completely!")
                 st.rerun()
             except Exception as e: 
+
                 st.sidebar.error(f"Error saving data: {e}. Is Excel open?")
