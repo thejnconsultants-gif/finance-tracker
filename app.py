@@ -147,7 +147,13 @@ def load_data():
         except: return pd.DataFrame()
 
     df = get_df('Budget Tracking')
-    if not df.empty and 'Date' in df.columns:
+    
+    # --- EMPTY SHEET SAFETY MECHANISM ---
+    # If the sheet is empty or headers are missing, create dummy columns so the app doesn't crash.
+    if df.empty or 'Date' not in df.columns:
+        df = pd.DataFrame(columns=['Date', 'Type', 'Category', 'Amount', 'Details', 'FY', 'Month', 'Year', 'Bank'])
+    else:
+        # Standard processing if data exists
         df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
         df = df.dropna(subset=['Date'])
         df['Year'] = df['Date'].dt.year 
@@ -262,20 +268,33 @@ page = st.sidebar.radio("Go To Screen", ["🏠 Main Dashboard (I&E)", "💰 Budg
 
 st.sidebar.markdown("---")
 st.sidebar.header("📅 Financial Year Filters")
-data_fys = df['FY'].dropna().unique().tolist()
-current_fy = get_financial_year(datetime.datetime.today())
-if current_fy not in data_fys: data_fys.append(current_fy)
-data_fys = sorted(list(set(data_fys)), reverse=True)
+
+# SAFETY FIX: Ensure 'FY' column exists before trying to access it
+if 'FY' in df.columns and not df.empty:
+    data_fys = df['FY'].dropna().unique().tolist()
+    current_fy = get_financial_year(datetime.datetime.today())
+    if current_fy not in data_fys: data_fys.append(current_fy)
+    data_fys = sorted(list(set(data_fys)), reverse=True)
+else:
+    current_fy = get_financial_year(datetime.datetime.today())
+    data_fys = [current_fy]
+
 selected_fy = st.sidebar.selectbox("Select Financial Year", ["All Years"] + data_fys)
 all_months = list(calendar.month_name)[1:]
 selected_month = st.sidebar.selectbox("Select Month", ["All Months"] + all_months)
 
 filtered_df = df.copy(); filtered_budget_df = budget_df.copy()
-if selected_fy != "All Years":
-    filtered_df = filtered_df[filtered_df['FY'] == selected_fy]
-if selected_month != "All Months":
-    filtered_df = filtered_df[filtered_df['Month'] == selected_month]
-    filtered_budget_df = filtered_budget_df[filtered_budget_df['Month'] == selected_month]
+
+# Apply Filters (Safely)
+if not filtered_df.empty and 'FY' in filtered_df.columns:
+    if selected_fy != "All Years":
+        filtered_df = filtered_df[filtered_df['FY'] == selected_fy]
+    if selected_month != "All Months":
+        filtered_df = filtered_df[filtered_df['Month'] == selected_month]
+
+if not filtered_budget_df.empty and 'Month' in filtered_budget_df.columns:
+    if selected_month != "All Months":
+        filtered_budget_df = filtered_budget_df[filtered_budget_df['Month'] == selected_month]
 
 def process_pie_data(target_df, threshold=0.05):
     if target_df.empty: return target_df
@@ -303,9 +322,9 @@ if page == "🏠 Main Dashboard (I&E)":
             
     if filtered_df.empty: st.warning("⚠️ No transactions found for the selected Financial Year/Month.")
 
-    total_income = filtered_df[filtered_df['Type'] == 'Income']['Amount'].sum()
-    total_expenses = filtered_df[filtered_df['Type'] == 'Expenses']['Amount'].sum()
-    total_savings = filtered_df[filtered_df['Type'] == 'Savings']['Amount'].sum()
+    total_income = filtered_df[filtered_df['Type'] == 'Income']['Amount'].sum() if not filtered_df.empty else 0
+    total_expenses = filtered_df[filtered_df['Type'] == 'Expenses']['Amount'].sum() if not filtered_df.empty else 0
+    total_savings = filtered_df[filtered_df['Type'] == 'Savings']['Amount'].sum() if not filtered_df.empty else 0
     net_balance = total_income - total_expenses - total_savings
 
     col1, col2, col3, col4 = st.columns(4)
@@ -316,38 +335,41 @@ if page == "🏠 Main Dashboard (I&E)":
 
     st.markdown("<br>", unsafe_allow_html=True)
     col_pie1, col_pie2, col_pie3 = st.columns(3)
-    with col_pie1:
-        st.markdown("<div class='chart-box'><h4 style='text-align: center;'>💼 INCOME</h4>", unsafe_allow_html=True)
-        income_df = filtered_df[(filtered_df['Type'] == 'Income') & (filtered_df['Amount'] > 0)]
-        income_df = process_pie_data(income_df, 0.05)
-        if not income_df.empty:
-            fig_inc = px.pie(income_df, values='Amount', names='Category', hole=0.5, color_discrete_sequence=px.colors.sequential.Teal)
-            fig_inc.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color=chart_text_color), margin=dict(t=0, b=20, l=0, r=0), showlegend=False)
-            fig_inc.update_traces(textposition='inside', textinfo='percent+label')
-            st.plotly_chart(fig_inc, use_container_width=True)
-        st.markdown("</div>", unsafe_allow_html=True)
+    
+    # SAFE PIE CHARTS
+    if not filtered_df.empty:
+        with col_pie1:
+            st.markdown("<div class='chart-box'><h4 style='text-align: center;'>💼 INCOME</h4>", unsafe_allow_html=True)
+            income_df = filtered_df[(filtered_df['Type'] == 'Income') & (filtered_df['Amount'] > 0)]
+            income_df = process_pie_data(income_df, 0.05)
+            if not income_df.empty:
+                fig_inc = px.pie(income_df, values='Amount', names='Category', hole=0.5, color_discrete_sequence=px.colors.sequential.Teal)
+                fig_inc.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color=chart_text_color), margin=dict(t=0, b=20, l=0, r=0), showlegend=False)
+                fig_inc.update_traces(textposition='inside', textinfo='percent+label')
+                st.plotly_chart(fig_inc, use_container_width=True)
+            st.markdown("</div>", unsafe_allow_html=True)
 
-    with col_pie2:
-        st.markdown("<div class='chart-box'><h4 style='text-align: center;'>📉 EXPENSES</h4>", unsafe_allow_html=True)
-        expense_df = filtered_df[(filtered_df['Type'] == 'Expenses') & (filtered_df['Amount'] > 0)]
-        expense_df = process_pie_data(expense_df, 0.05)
-        if not expense_df.empty:
-            fig_exp = px.pie(expense_df, values='Amount', names='Category', hole=0.5, color_discrete_sequence=px.colors.sequential.Reds)
-            fig_exp.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color=chart_text_color), margin=dict(t=0, b=20, l=0, r=0), showlegend=False)
-            fig_exp.update_traces(textposition='inside', textinfo='percent+label')
-            st.plotly_chart(fig_exp, use_container_width=True)
-        st.markdown("</div>", unsafe_allow_html=True)
+        with col_pie2:
+            st.markdown("<div class='chart-box'><h4 style='text-align: center;'>📉 EXPENSES</h4>", unsafe_allow_html=True)
+            expense_df = filtered_df[(filtered_df['Type'] == 'Expenses') & (filtered_df['Amount'] > 0)]
+            expense_df = process_pie_data(expense_df, 0.05)
+            if not expense_df.empty:
+                fig_exp = px.pie(expense_df, values='Amount', names='Category', hole=0.5, color_discrete_sequence=px.colors.sequential.Reds)
+                fig_exp.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color=chart_text_color), margin=dict(t=0, b=20, l=0, r=0), showlegend=False)
+                fig_exp.update_traces(textposition='inside', textinfo='percent+label')
+                st.plotly_chart(fig_exp, use_container_width=True)
+            st.markdown("</div>", unsafe_allow_html=True)
 
-    with col_pie3:
-        st.markdown("<div class='chart-box'><h4 style='text-align: center;'>🏦 SAVINGS</h4>", unsafe_allow_html=True)
-        savings_df = filtered_df[(filtered_df['Type'] == 'Savings') & (filtered_df['Amount'] > 0)]
-        savings_df = process_pie_data(savings_df, 0.05)
-        if not savings_df.empty:
-            fig_sav = px.pie(savings_df, values='Amount', names='Category', hole=0.5, color_discrete_sequence=px.colors.sequential.Blues)
-            fig_sav.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color=chart_text_color), margin=dict(t=0, b=20, l=0, r=0), showlegend=False)
-            fig_sav.update_traces(textposition='inside', textinfo='percent+label')
-            st.plotly_chart(fig_sav, use_container_width=True)
-        st.markdown("</div>", unsafe_allow_html=True)
+        with col_pie3:
+            st.markdown("<div class='chart-box'><h4 style='text-align: center;'>🏦 SAVINGS</h4>", unsafe_allow_html=True)
+            savings_df = filtered_df[(filtered_df['Type'] == 'Savings') & (filtered_df['Amount'] > 0)]
+            savings_df = process_pie_data(savings_df, 0.05)
+            if not savings_df.empty:
+                fig_sav = px.pie(savings_df, values='Amount', names='Category', hole=0.5, color_discrete_sequence=px.colors.sequential.Blues)
+                fig_sav.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color=chart_text_color), margin=dict(t=0, b=20, l=0, r=0), showlegend=False)
+                fig_sav.update_traces(textposition='inside', textinfo='percent+label')
+                st.plotly_chart(fig_sav, use_container_width=True)
+            st.markdown("</div>", unsafe_allow_html=True)
 
 elif page == "💰 Budget Planner":
     st.markdown("<h2>💰 Budget Planner</h2>", unsafe_allow_html=True)
@@ -358,7 +380,7 @@ elif page == "💰 Budget Planner":
         c1, c2 = st.columns(2)
         with c1:
             b_type = st.selectbox("Type", ["Income", "Expenses", "Savings"])
-            existing_cats = df[df['Type'] == b_type]['Category'].unique().tolist()
+            existing_cats = df[df['Type'] == b_type]['Category'].unique().tolist() if not df.empty else []
             b_cat = st.selectbox("Category", existing_cats + ["+ Add New..."])
             if b_cat == "+ Add New...": b_cat = st.text_input("New Category Name")
         with c2:
@@ -373,10 +395,8 @@ elif page == "💰 Budget Planner":
                     try: ws = sh.worksheet('Budget Planning')
                     except: ws = sh.add_worksheet('Budget Planning', 100, 20); ws.append_row(['Type', 'Category'] + FY_MONTHS)
                     
-                    # Read all data
                     all_data = ws.get_all_values()
                     headers = all_data[0]
-                    # Find if row exists
                     row_idx = -1
                     for idx, row in enumerate(all_data):
                         if idx == 0: continue
@@ -384,14 +404,11 @@ elif page == "💰 Budget Planner":
                             row_idx = idx + 1; break
                     
                     if row_idx == -1:
-                        # Append new row
                         new_row = [b_type, b_cat] + [0]*12
                         ws.append_row(new_row)
                         row_idx = len(all_data) + 1
                     
-                    # Update columns
                     if b_freq == "Entire Year (Apr-Mar)":
-                        # Update cols 3 to 14
                         cell_list = []
                         for c_i in range(3, 15): cell_list.append(gspread.Cell(row_idx, c_i, b_val))
                         ws.update_cells(cell_list)
@@ -414,35 +431,39 @@ elif page == "💰 Budget Planner":
 
 elif page == "📈 Investment Tracker":
     st.title("📈 Investment Portfolio")
-    # ... (Keep original logic but adapt write operations) ...
-    # Investment Tracker Logic (Read-Only visualization is safe).
-    # Write Logic for "Sell Investment" needs update.
-    # [Truncated for brevity - Reusing Read Logic from your offline code which works]
-    # ...
-    # WRITING LOGIC FOR "Execute Sale":
-    # Replace openpyxl write with:
-    # client = init_connection(); sh = client.open("Finance Tracker"); ws = sh.worksheet('Budget Tracking')
-    # ws.append_row([timestamp, date, 'Income', 'Investment Payout', amount, details])
-    
-    # FOR NOW, I will paste the core logic and update the WRITE part:
+    # Investment Read-Only Logic
     summary_df = pd.DataFrame()
-    if 'Details' in df.columns:
-        # (Your extraction logic here - keeping it exactly as is)
+    if not df.empty and 'Details' in df.columns:
         t_col = df['Details'].astype(str).str.extract(r'\[Ticker:\s*([^,\]]+)')[0]
         q_col = df['Details'].astype(str).str.extract(r'Qty:\s*([0-9.-]+)')[0]
         c_col = df['Details'].astype(str).str.extract(r'Class:\s*([^,\]]+)')[0]
         extracted = pd.DataFrame({'Ticker': t_col, 'Qty': q_col, 'Asset_Class': c_col})
         portfolio_data = pd.concat([df[['Date', 'Category', 'Amount']], extracted], axis=1).dropna(subset=['Ticker'])
         portfolio_data['Qty'] = pd.to_numeric(portfolio_data['Qty'], errors='coerce').fillna(0)
-        # ... (rest of classification logic) ...
-        summary_df = portfolio_data.groupby('Ticker')['Qty'].sum().reset_index()
-        # ... (Display Logic) ...
         
-        st.dataframe(portfolio_data, use_container_width=True)
+        if not portfolio_data.empty:
+            summary_df = portfolio_data.groupby('Ticker')['Qty'].sum().reset_index()
+            # Basic display for now
+            st.dataframe(portfolio_data, use_container_width=True)
+            
+    # Write Logic for Sales
+    with st.expander("📉 Sell an Asset"):
+        sell_ticker = st.text_input("Ticker Symbol")
+        sell_qty = st.number_input("Quantity", min_value=0.0)
+        sell_price = st.number_input("Price", min_value=0.0)
+        
+        if st.button("Execute Sale"):
+            try:
+                client = init_connection(); sh = client.open("Finance Tracker"); ws = sh.worksheet('Budget Tracking')
+                # Add Income entry
+                ws.append_row([str(datetime.datetime.now().timestamp()), str(datetime.date.today()), "Income", "Investment Payout", sell_qty * sell_price, f"[Ticker: {sell_ticker}, Qty: {-sell_qty}] Sold Asset"])
+                st.success("Sale Recorded!"); st.cache_data.clear(); st.rerun()
+            except Exception as e: st.error(f"Error: {e}")
 
 elif page == "💳 Credit Cards":
     st.markdown("<h2>💳 Credit Health</h2>", unsafe_allow_html=True)
     with st.expander("⚙️ Manage Wallet"):
+        if cc_df.empty: cc_df = pd.DataFrame(columns=['Card Name', 'Limit', 'Statement Date'])
         edited_cc = st.data_editor(cc_df, num_rows="dynamic")
         if st.button("💾 Save Wallet"):
             try:
@@ -456,13 +477,13 @@ elif page == "💳 Credit Cards":
 elif page == "🔄 Subscription Radar":
     st.title("🔄 Subscription Radar")
     with st.expander("⚙️ Manage Subscriptions"):
+        if subs_df.empty: subs_df = pd.DataFrame(columns=['Service Name', 'Category', 'Amount', 'Next Due Date'])
         edited_subs = st.data_editor(subs_df, num_rows="dynamic")
         if st.button("💾 Save Subs"):
             try:
                 client = init_connection(); sh = client.open("Finance Tracker")
                 ws = sh.worksheet('Subscriptions')
                 ws.clear()
-                # Ensure dates are strings
                 edited_subs['Next Due Date'] = edited_subs['Next Due Date'].astype(str)
                 ws.update([edited_subs.columns.values.tolist()] + edited_subs.values.tolist())
                 st.success("Updated!"); st.cache_data.clear(); st.rerun()
@@ -470,7 +491,6 @@ elif page == "🔄 Subscription Radar":
 
 elif page == "🤝 Splitwise / Settles":
     st.title("🤝 Splitwise")
-    # Quick Add Split
     with st.form("split_form"):
         sp_desc = st.text_input("Description")
         sp_amt = st.number_input("Amount", min_value=0.0)
@@ -487,7 +507,6 @@ elif page == "🤝 Splitwise / Settles":
 
 elif page == "⚖️ Net Worth & Goals":
     st.title("⚖️ Net Worth")
-    # Goal Logic
     with st.expander("➕ Add Goal"):
         g_name = st.text_input("Goal Name")
         g_target = st.number_input("Target Amount")
