@@ -35,134 +35,53 @@ if 'theme' not in st.session_state:
     st.session_state['theme'] = 'Light'
 
 # --- CSS THEMES ---
-# --- CFO PREMIUM NEON DARK THEME (FIXED DROPDOWNS & TABS) ---
 DARK_THEME = """
 <style>
     /* 1. GLOBAL BACKGROUNDS */
     [data-testid="stAppViewContainer"], [data-testid="stHeader"], .main {
         background-color: #000000 !important;
     }
-
-    /* 2. SIDEBAR - DEEP BLACK WITH NEON ACCENT */
+    /* 2. SIDEBAR */
     [data-testid="stSidebar"], [data-testid="stSidebar"] > div:first-child {
-        background-color: #050505 !important;
-        border-right: 1px solid #222 !important;
+        background-color: #050505 !important; border-right: 1px solid #222 !important;
     }
-
-    /* 3. UNIVERSAL TEXT GLOW */
-    html, body, [data-testid="stMarkdownContainer"] p, label, span, li, td, th, div {
-        color: #ffffff !important;
-        text-shadow: 0 0 1px rgba(255, 255, 255, 0.4) !important;
+    /* 3. TEXT GLOW */
+    html, body, p, label, span, li, td, th, div {
+        color: #ffffff !important; text-shadow: 0 0 1px rgba(255, 255, 255, 0.4) !important;
     }
-
-    /* 4. DROPDOWN & INPUT BOXES - FIXING THE WHITE FILL */
-    /* This targets the container and the internal select elements */
-    [data-baseweb="select"], [data-baseweb="popover"], div[role="listbox"], .stSelectbox div {
-        background-color: #111111 !important;
-        color: #ffffff !important;
-    }
-    
-    /* Targets the actual input area of the dropdown */
-    [data-testid="stSelectbox"] div[data-baseweb="select"] > div {
-        background-color: #111111 !important;
-        color: #ffffff !important;
-        border: 1px solid #333 !important;
-    }
-
-    /* 5. SIDEBAR NAVIGATION - MORE COLORFUL LIFE */
-    /* Radio buttons / Navigation links */
-    [data-testid="stSidebar"] [data-testid="stWidgetLabel"] p {
-        color: #00e5ff !important; /* Cyber Cyan */
-        font-weight: 700 !important;
-        letter-spacing: 1px;
-        text-transform: uppercase;
-    }
-    
-    /* Making sidebar items pop on hover */
-    [data-testid="stSidebar"] label:hover {
-        color: #ff00ff !important; /* Neon Pink hover effect */
-        transition: 0.3s ease;
-    }
-
-    /* 6. BUDGET TABS - NEON ACCENTS */
-    button[data-baseweb="tab"] {
-        background-color: #0a0a0a !important;
-        border: 1px solid #333 !important;
-        border-radius: 8px 8px 0 0 !important;
-        margin-right: 5px !important;
-    }
-    
-    /* Active Tab Glow */
-    button[aria-selected="true"] {
-        border-top: 3px solid #2979ff !important;
-        background-color: #111111 !important;
-        box-shadow: 0 -5px 10px rgba(41, 121, 255, 0.2) !important;
-    }
-
-    /* 7. KPI CARDS - MULTICOLOR GLOWS (Keep from previous) */
+    /* 4. INPUTS */
+    [data-baseweb="select"], .stSelectbox div { background-color: #111 !important; color: #fff !important; }
+    /* 5. KPI GLOWS */
     .glow-income { border-top: 4px solid #00c853 !important; background: #0a0a0a !important; box-shadow: 0 4px 15px rgba(0, 200, 83, 0.2) !important; border-radius: 10px; padding: 15px; margin-bottom: 20px; }
     .glow-expenses { border-top: 4px solid #ff1744 !important; background: #0a0a0a !important; box-shadow: 0 4px 15px rgba(255, 23, 68, 0.2) !important; border-radius: 10px; padding: 15px; margin-bottom: 20px; }
     .glow-savings { border-top: 4px solid #2979ff !important; background: #0a0a0a !important; box-shadow: 0 4px 15px rgba(41, 121, 255, 0.2) !important; border-radius: 10px; padding: 15px; margin-bottom: 20px; }
     .glow-balance { border-top: 4px solid #ffd600 !important; background: #0a0a0a !important; box-shadow: 0 4px 15px rgba(255, 214, 0, 0.2) !important; border-radius: 10px; padding: 15px; margin-bottom: 20px; }
-
-    /* 8. PLOTLY CHART TEXT FIX */
-    .legendtext, .main-svg text {
-        fill: #ffffff !important;
-    }
+    .kpi-value { font-size: 2rem; font-weight: 800; color: #fff; }
+    .kpi-title { font-size: 0.9rem; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 5px; }
 </style>
 """
 LIGHT_THEME = """
 <style>
     [data-testid="stAppViewContainer"] { background-color: #f8f9fa; color: #212529; }
-    [data-testid="stSidebar"] { background-color: #ffffff; border-right: 1px solid #dee2e6; }
-    .glow-card { background: #ffffff; border-radius: 12px; padding: 20px; border: 1px solid #e9ecef; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
-    .kpi-title { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 1px; color: #6c757d; margin-bottom: 5px; font-weight: 700; }
-    .kpi-value { font-size: 2rem; font-weight: 800; color: #212529; margin: 0; }
-    .chart-box { background: #ffffff; border: 1px solid #e9ecef; border-radius: 12px; padding: 20px; margin-bottom: 20px; }
-    .stProgress > div > div > div > div { background-color: #007bff; }
+    .glow-card { background: #ffffff; padding: 20px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
 </style>
 """
 
-# ==========================================
-# 2. ALGORITHMS & LOADERS
-# ==========================================
-# Standard Financial Year List: April to March (Global Constant)
+# Standard Financial Year List
 FY_MONTHS = ['April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December', 'January', 'February', 'March']
+
+# --- HELPER FUNCTIONS (REQUIRED) ---
+def format_inr(number):
+    try:
+        n = float(number); is_neg = n < 0; n = abs(n)
+        s, *d = "{:.0f}".format(n).partition(".")
+        r = ",".join([s[x-2:x] for x in range(-3, -len(s), -2)][::-1] + [s[-3:]])
+        return "-" + "".join([r] + d) if is_neg else "".join([r] + d)
+    except: return str(number)
 
 def get_financial_year(date):
     if pd.isna(date): return "Unknown"
-    y = date.year
-    if date.month >= 4: return f"FY {y}-{str(y+1)[-2:]}"
-    else: return f"FY {y-1}-{str(y)[-2:]}"
-
-def calc_xirr(cash_flows):
-    try:
-        cash_flows = [cf for cf in cash_flows if cf[1] != 0]
-        if len(cash_flows) < 2: return 0.0 
-        cash_flows = sorted(cash_flows, key=lambda x: x[0])
-        t0 = cash_flows[0][0]
-        if cash_flows[0][0] == cash_flows[-1][0]: return 0.0
-        def xnpv(rate): 
-            if rate <= -1.0: return float('inf')
-            return sum([cf[1] / (1.0 + rate)**((cf[0] - t0).days / 365.0) for cf in cash_flows])
-        low = -0.9999; high = 100.0  
-        if xnpv(low) > 0 and xnpv(high) > 0: return 0.0 
-        for _ in range(50):
-            mid = (low + high) / 2.0
-            if abs(xnpv(mid)) < 0.0001: return mid
-            elif xnpv(mid) > 0: low = mid
-            else: high = mid
-        return (low + high) / 2.0
-    except: return 0.0
-
-# ==========================================
-# 3. DATA LOADER (CLOUD CONNECTION)
-# ==========================================
-import json
-import os 
-from oauth2client.service_account import ServiceAccountCredentials
-
-@st.cache_resource
+    return f"FY {date.year}-{str(date.year+1)[-2:]}" if date.month >= 4 else f"FY {date.year-1}-{str(date.year)[-2:]}"
 def init_connection():
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
     
@@ -1463,6 +1382,7 @@ if page == "🏠 Main Dashboard (I&E)":
             except Exception as e: 
 
                 st.sidebar.error(f"Error saving data: {e}. Is Excel open?")
+
 
 
 
