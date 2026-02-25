@@ -13,6 +13,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 from PIL import Image
 
 # --- OPTIONAL IMPORTS (Safety Check) ---
+# These try/except blocks prevent the app from crashing if a library is missing
 try:
     import yfinance as yf
     HAS_YFINANCE = True
@@ -39,7 +40,7 @@ st.set_page_config(page_title="Jaynik's Finance Dashboard", page_icon="💎", la
 if 'theme' not in st.session_state:
     st.session_state['theme'] = 'Light'
 
-# --- CSS THEMES ---
+# --- CSS THEMES (The "Neon" Look) ---
 DARK_THEME = """
 <style>
     /* 1. GLOBAL BACKGROUNDS */
@@ -115,7 +116,7 @@ def init_connection():
     return client
 
 # ==========================================
-# 3. DATA LOADER (FULL 9 TABS)
+# 3. DATA LOADER (RESTORING ALL 9 TABS)
 # ==========================================
 @st.cache_data(ttl=5)
 def load_data():
@@ -160,7 +161,7 @@ def load_data():
 df, budget_df, budget_raw_df, cc_df, loan_df, assets_df, split_df, subs_df, goals_df, invest_df = load_data()
 
 # ==========================================
-# 4. SIDEBAR & NAVIGATION (THE "PIC 1" LOOK)
+# 4. SIDEBAR & NAVIGATION (THE "FULL MENU")
 # ==========================================
 st.sidebar.title("🎨 App Theme")
 mode = st.sidebar.radio("Select Mode:", ["Light", "Dark Mode"])
