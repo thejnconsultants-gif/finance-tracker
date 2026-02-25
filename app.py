@@ -87,11 +87,8 @@ def get_financial_year(date):
 def init_connection():
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
     
-    # CASE 1: Local Laptop (Uses file)
     if os.path.exists('credentials.json'):
         creds = ServiceAccountCredentials.from_json_keyfile_name('credentials.json', scope)
-    
-    # CASE 2: Streamlit Cloud (Uses Secrets)
     else:
         creds_dict = {
             "type": st.secrets["gcp_service_account"]["type"],
@@ -110,7 +107,8 @@ def init_connection():
     client = gspread.authorize(creds)
     return client
 
-@st.cache_data(ttl=5)
+# INCREASED TTL TO 600 TO PREVENT API QUOTA ERRORS
+@st.cache_data(ttl=600)
 def load_data():
     client = init_connection()
     try:
@@ -123,20 +121,14 @@ def load_data():
         try:
             ws = sh.worksheet(worksheet_name)
             data = ws.get_all_records()
-            # If sheet is empty or only has headers, return empty DF with correct columns
-            if not data:
-                return pd.DataFrame()
             return pd.DataFrame(data)
         except: return pd.DataFrame()
 
+    # 1. Main Budget Tracking (Safe Load)
     df = get_df('Budget Tracking')
-    
-    # --- SAFETY: Handle Empty Sheets ---
     if df.empty or 'Date' not in df.columns:
-        # Create a dummy DataFrame so the app doesn't crash on 'KeyError: FY'
         df = pd.DataFrame(columns=['Date', 'Type', 'Category', 'Amount', 'Details', 'FY', 'Month', 'Year', 'Bank'])
     else:
-        # Standard processing
         df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
         df = df.dropna(subset=['Date'])
         if not df.empty:
@@ -145,6 +137,7 @@ def load_data():
             df['Month'] = df['Date'].dt.month_name()
             df['Amount'] = pd.to_numeric(df['Amount'].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
     
+    # 2. Budget Planning
     budget_raw = get_df('Budget Planning')
     budget_melted = pd.DataFrame()
     if not budget_raw.empty:
@@ -153,17 +146,124 @@ def load_data():
             budget_melted = budget_raw.melt(id_vars=['Category', 'Type'], value_vars=valid_months, var_name='Month', value_name='Amount')
             budget_melted['Amount'] = pd.to_numeric(budget_melted['Amount'], errors='coerce').fillna(0)
 
-    return df, budget_melted, budget_raw, get_df('Credit Cards'), get_df('Loans'), get_df('Physical Assets'), get_df('Splitwise'), get_df('Subscriptions'), get_df('Goals')
+    # 3. SAFETY CHECKS FOR ALL OTHER TABS
+    # If a tab is empty, we force create the dataframe with the right columns to prevent KeyErrors
+    
+    # Splitwise Safety
+    split_df = get_df('Splitwise')
+    if split_df.empty or 'Debtor' not in split_df.columns:
+        split_df = pd.DataFrame(columns=['ID', 'Date', 'Payer', 'Debtor', 'Total Amount', 'Split Amount', 'Description', 'Status'])
+    else:
+        split_df['Split Amount'] = pd.to_numeric(split_df['Split Amount'], errors='coerce').fillna(0)
+
+    # Credit Cards Safety
+    cc_df = get_df('Credit Cards')
+    if cc_df.empty or 'Card Name' not in cc_df.columns:
+        cc_df = pd.DataFrame(columns=['Card Name', 'Total Limit', 'Statement Date', 'Target Spend (₹)'])
+        
+    # Loans Safety
+    loan_df = get_df('Loans')
+    if loan_df.empty:
+        loan_df = pd.DataFrame(columns=['Loan Name', 'Principal', 'Interest Rate', 'Tenure', 'Start Date', 'Type'])
+
+    # Assets Safety
+    assets_df = get_df('Physical Assets')
+    if assets_df.empty:
+        assets_df = pd.DataFrame(columns=['Asset Name', 'Category', 'Estimated Value (₹)'])
+    else:
+         assets_df['Estimated Value (₹)'] = pd.to_numeric(assets_df['Estimated Value (₹)'], errors='coerce').fillna(0)
+
+    # Subscriptions Safety
+    subs_df = get_df('Subscriptions')
+    if subs_df.empty:
+        subs_df = pd.DataFrame(columns=['Service Name', 'Category', 'Billing Cycle', 'Amount (₹)', 'Next Due Date'])
+        
+    # Goals Safety
+    goals_df = get_df('Goals')
+    if goals_df.empty:
+        goals_df = pd.DataFrame(columns=['Goal Name', 'Target Amount', 'Target Date', 'Priority', 'Status'])
+
+    return df, budget_melted, budget_raw, cc_df, loan_df, assets_df, split_df, subs_df, goals_df
 
 df, budget_df, budget_matrix_df, cc_df, loan_df, assets_df, split_df, subs_df, goals_df = load_data()
 
-# Splitwise Users
+# Splitwise Users Logic
 split_users = set(["Partner"])
 if not split_df.empty:
-    split_users.update(split_df['Payer'].dropna().astype(str).unique())
-    split_users.update(split_df['Debtor'].dropna().astype(str).unique())
+    if 'Payer' in split_df.columns:
+        split_users.update(split_df['Payer'].dropna().astype(str).unique())
+    if 'Debtor' in split_df.columns:
+        split_users.update(split_df['Debtor'].dropna().astype(str).unique())
 if "Jaynik" in split_users: split_users.remove("Jaynik")
 split_users = sorted(list(split_users))
+
+# ==========================================
+# 3. GLOBAL DATA FETCHERS
+# ==========================================
+@st.cache_data(ttl=3600) 
+def fetch_amfi_data():
+    amfi_dict = {}; mf_dropdown_list = []
+    try:
+        url = "https://www.amfiindia.com/spages/NAVAll.txt"
+        response = requests.get(url, timeout=10)
+        for line in response.text.split('\n'):
+            parts = line.split(';')
+            if len(parts) >= 5 and parts[0].isdigit():
+                code = parts[0]; name = parts[3]
+                try: amfi_dict[code] = {'name': name, 'nav': float(parts[4])}; mf_dropdown_list.append(f"{name} [{code}]")
+                except: pass
+    except: pass
+    mf_dropdown_list.sort(); return amfi_dict, mf_dropdown_list
+
+@st.cache_data(ttl=86400) 
+def fetch_nse_data():
+    nse_dict = {}; nse_dropdown_list = []
+    try:
+        url = "https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv"
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code == 200:
+            df_nse = pd.read_csv(io.StringIO(response.text))
+            for _, row in df_nse.iterrows():
+                symbol = str(row['SYMBOL']).strip(); name = str(row['NAME OF COMPANY']).strip().title()
+                nse_dict[symbol] = name; nse_dropdown_list.append(f"{name} [{symbol}]")
+    except: pass
+    etf_list = {"NIFTYBEES": "Nippon India Nifty 50 ETF", "BANKBEES": "Nippon India Bank ETF"}
+    for sym, name in etf_list.items(): nse_dict[sym] = name; nse_dropdown_list.append(f"⭐ {name} [{sym}]") 
+    nse_dropdown_list.sort(); return nse_dict, nse_dropdown_list
+
+@st.cache_data(ttl=300) 
+def get_market_data(tickers, amfi_dict, nse_dict):
+    prices = {}; names = {}
+    if not HAS_YFINANCE: return prices, names
+    for t in tickers:
+        t_str = str(t)
+        if t_str in amfi_dict: prices[t_str] = amfi_dict[t_str]['nav']; names[t_str] = amfi_dict[t_str]['name']
+        else:
+            clean_ticker = t_str.replace('.NS', '').replace('.BO', '')
+            if clean_ticker in nse_dict: names[t_str] = nse_dict[clean_ticker]
+            else: names[t_str] = t_str 
+            try:
+                search_ticker = t_str if "." in t_str or "-" in t_str or t_str.isdigit() else f"{t_str}.NS"
+                hist = yf.Ticker(search_ticker).history(period="1d")
+                prices[t_str] = float(hist['Close'].iloc[-1]) if not hist.empty else 0.0
+            except: prices[t_str] = 0.0
+    return prices, names
+
+@st.cache_data(ttl=86400)
+def fetch_benchmark_history(start_date):
+    if not HAS_YFINANCE: return pd.Series()
+    try:
+        start_date_str = pd.to_datetime(start_date).strftime('%Y-%m-%d')
+        nifty = yf.Ticker("^NSEI").history(start=start_date_str)
+        nifty.index = nifty.index.tz_localize(None).normalize()
+        idx = pd.date_range(start=nifty.index.min(), end=pd.Timestamp.today().normalize())
+        nifty = nifty.reindex(idx).ffill().bfill()
+        return nifty['Close']
+    except: return pd.Series()
+
+amfi_data_dict, amfi_dropdown = fetch_amfi_data()
+nse_data_dict, nse_dropdown = fetch_nse_data()
 
 # ==========================================
 # 4. SIDEBAR: NAVIGATION
@@ -231,10 +331,12 @@ def process_pie_data(target_df, threshold=0.05):
 
 if page == "🏠 Main Dashboard (I&E)":
     if current_user != "Household (Combined)":
-        pending_alerts = split_df[(split_df['Debtor'] == current_user) & (split_df['Status'] == 'Pending')]
-        if not pending_alerts.empty:
-            total_owed_by_me = pending_alerts['Split Amount'].sum()
-            st.markdown(f"<div class='alert-box'><b>🔔 You have pending Splitwise settlements!</b> You owe ₹{total_owed_by_me:,.0f} to other members.</div>", unsafe_allow_html=True)
+        # SAFETY FIX: Ensure Splitwise columns exist
+        if not split_df.empty and 'Debtor' in split_df.columns and 'Status' in split_df.columns:
+            pending_alerts = split_df[(split_df['Debtor'] == current_user) & (split_df['Status'] == 'Pending')]
+            if not pending_alerts.empty:
+                total_owed_by_me = pending_alerts['Split Amount'].sum()
+                st.markdown(f"<div class='alert-box'><b>🔔 You have pending Splitwise settlements!</b> You owe ₹{total_owed_by_me:,.0f} to other members.</div>", unsafe_allow_html=True)
             
     if filtered_df.empty: st.info("👋 Welcome! Your database is connected but empty. Use the sidebar to add your first transaction.")
 
@@ -382,7 +484,7 @@ elif page == "📈 Investment Tracker":
 elif page == "💳 Credit Cards":
     st.markdown("<h2>💳 Credit Health</h2>", unsafe_allow_html=True)
     with st.expander("⚙️ Manage Wallet"):
-        if cc_df.empty: cc_df = pd.DataFrame(columns=['Card Name', 'Limit', 'Statement Date'])
+        if cc_df.empty: cc_df = pd.DataFrame(columns=['Card Name', 'Total Limit', 'Statement Date', 'Target Spend (₹)'])
         edited_cc = st.data_editor(cc_df, num_rows="dynamic")
         if st.button("💾 Save Wallet"):
             try:
@@ -396,7 +498,7 @@ elif page == "💳 Credit Cards":
 elif page == "🔄 Subscription Radar":
     st.title("🔄 Subscription Radar")
     with st.expander("⚙️ Manage Subscriptions"):
-        if subs_df.empty: subs_df = pd.DataFrame(columns=['Service Name', 'Category', 'Amount', 'Next Due Date'])
+        if subs_df.empty: subs_df = pd.DataFrame(columns=['Service Name', 'Category', 'Billing Cycle', 'Amount (₹)', 'Next Due Date'])
         edited_subs = st.data_editor(subs_df, num_rows="dynamic")
         if st.button("💾 Save Subs"):
             try:
