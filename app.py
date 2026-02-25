@@ -210,13 +210,24 @@ def load_data():
         df['Month'] = df['Date'].dt.month_name()
         df['Amount'] = pd.to_numeric(df['Amount'], errors='coerce').fillna(0)
     
+    # ... inside def load_data(): ...
+
     # Load Budget
     budget_raw = get_df('Budget Planning')
     budget_melted = pd.DataFrame()
     if not budget_raw.empty:
-        month_cols = ['April','May','June','July','August','
-
-
+        # ---------------- FIX STARTS HERE ----------------
+        # I have split this into two lines safely so it won't break again
+        month_cols = [
+            'April', 'May', 'June', 'July', 'August', 'September', 
+            'October', 'November', 'December', 'January', 'February', 'March'
+        ]
+        # ---------------- FIX ENDS HERE ----------------
+        
+        valid_months = [m for m in month_cols if m in budget_raw.columns]
+        if valid_months:
+            budget_melted = budget_raw.melt(id_vars=['Category', 'Type'], value_vars=valid_months, var_name='Month', value_name='Amount')
+            budget_melted['Amount'] = pd.to_numeric(budget_melted['Amount'], errors='coerce').fillna(0)
 split_users = set(["Partner"])
 if not split_df.empty:
     split_users.update(split_df['Payer'].dropna().astype(str).unique())
@@ -1447,4 +1458,5 @@ if page == "🏠 Main Dashboard (I&E)":
             except Exception as e: 
 
                 st.sidebar.error(f"Error saving data: {e}. Is Excel open?")
+
 
