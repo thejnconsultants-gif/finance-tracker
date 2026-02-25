@@ -12,10 +12,29 @@ import re
 from oauth2client.service_account import ServiceAccountCredentials
 from PIL import Image
 
+# --- OPTIONAL IMPORTS (Safety Check) ---
+try:
+    import yfinance as yf
+    HAS_YFINANCE = True
+except ImportError:
+    HAS_YFINANCE = False
+
+try:
+    import google.generativeai as genai
+    HAS_GENAI = True
+except ImportError:
+    HAS_GENAI = False
+
+try:
+    import pdfplumber
+    HAS_PDF = True
+except ImportError:
+    HAS_PDF = False
+
 # ==========================================
 # 1. PAGE SETUP & THEME ENGINE
 # ==========================================
-st.set_page_config(page_title="Finance Command Center", page_icon="💎", layout="wide")
+st.set_page_config(page_title="Jaynik's Finance Dashboard", page_icon="💎", layout="wide")
 
 if 'theme' not in st.session_state:
     st.session_state['theme'] = 'Light'
@@ -23,27 +42,34 @@ if 'theme' not in st.session_state:
 # --- CSS THEMES ---
 DARK_THEME = """
 <style>
-    /* Global Dark Mode */
-    [data-testid="stAppViewContainer"], [data-testid="stHeader"], .main { background-color: #000000 !important; color: #fff !important; }
-    [data-testid="stSidebar"] { background-color: #050505 !important; border-right: 1px solid #222 !important; }
+    /* 1. GLOBAL BACKGROUNDS */
+    [data-testid="stAppViewContainer"], [data-testid="stHeader"], .main {
+        background-color: #000000 !important; color: #ffffff !important;
+    }
+    [data-testid="stSidebar"], [data-testid="stSidebar"] > div:first-child {
+        background-color: #050505 !important; border-right: 1px solid #222 !important;
+    }
     
-    /* Text Visibility */
-    h1, h2, h3, h4, h5, p, span, label, div { color: #ffffff !important; text-shadow: 0 0 1px rgba(255,255,255,0.3); }
+    /* 2. TEXT GLOW */
+    h1, h2, h3, h4, p, span, div, label { color: #ffffff !important; text-shadow: 0 0 1px rgba(255, 255, 255, 0.4); }
     
-    /* Input Fields */
-    input, .stSelectbox div, .stNumberInput input, textarea { background-color: #111 !important; color: #fff !important; border: 1px solid #444 !important; }
+    /* 3. INPUTS & CARDS */
+    .stTextInput input, .stNumberInput input, .stSelectbox div, .stDateInput input {
+        background-color: #111 !important; color: #fff !important; border: 1px solid #333 !important;
+    }
     
-    /* KPI Cards */
-    .glow-income { border-top: 3px solid #00c853; background: #0a0a0a; padding: 15px; border-radius: 10px; box-shadow: 0 5px 15px rgba(0,200,83,0.15); text-align: center; }
-    .glow-expenses { border-top: 3px solid #ff1744; background: #0a0a0a; padding: 15px; border-radius: 10px; box-shadow: 0 5px 15px rgba(255,23,68,0.15); text-align: center; }
-    .glow-savings { border-top: 3px solid #2979ff; background: #0a0a0a; padding: 15px; border-radius: 10px; box-shadow: 0 5px 15px rgba(41,121,255,0.15); text-align: center; }
-    .glow-balance { border-top: 3px solid #ffd600; background: #0a0a0a; padding: 15px; border-radius: 10px; box-shadow: 0 5px 15px rgba(255,214,0,0.15); text-align: center; }
+    /* 4. KPI CARDS (NEON) */
+    .glow-income { border-top: 4px solid #00c853 !important; background: #0a0a0a; box-shadow: 0 4px 15px rgba(0, 200, 83, 0.2); border-radius: 10px; padding: 15px; text-align: center; }
+    .glow-expenses { border-top: 4px solid #ff1744 !important; background: #0a0a0a; box-shadow: 0 4px 15px rgba(255, 23, 68, 0.2); border-radius: 10px; padding: 15px; text-align: center; }
+    .glow-savings { border-top: 4px solid #2979ff !important; background: #0a0a0a; box-shadow: 0 4px 15px rgba(41, 121, 255, 0.2); border-radius: 10px; padding: 15px; text-align: center; }
+    .glow-balance { border-top: 4px solid #ffd600 !important; background: #0a0a0a; box-shadow: 0 4px 15px rgba(255, 214, 0, 0.2); border-radius: 10px; padding: 15px; text-align: center; }
     
+    .kpi-value { font-size: 2rem; font-weight: 800; margin: 0; }
     .kpi-title { font-size: 0.9rem; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 5px; }
-    .kpi-value { font-size: 2rem; font-weight: 800; color: #fff; }
 </style>
 """
-LIGHT_THEME = """<style>[data-testid="stAppViewContainer"]{background:#f8f9fa;color:#212529;}</style>"""
+
+LIGHT_THEME = """<style>[data-testid="stAppViewContainer"]{background-color:#f8f9fa;color:#212529;}</style>"""
 
 # --- HELPER FUNCTIONS ---
 def format_inr(number):
@@ -65,11 +91,11 @@ def get_financial_year(date):
 def init_connection():
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
     
-    # CASE 1: Local Laptop (Uses file)
+    # CASE 1: Local Laptop
     if os.path.exists('credentials.json'):
         creds = ServiceAccountCredentials.from_json_keyfile_name('credentials.json', scope)
     
-    # CASE 2: Streamlit Cloud (Uses Secrets)
+    # CASE 2: Streamlit Cloud
     else:
         creds_dict = {
             "type": st.secrets["gcp_service_account"]["type"],
@@ -89,7 +115,7 @@ def init_connection():
     return client
 
 # ==========================================
-# 3. DATA LOADER (FULL TABS)
+# 3. DATA LOADER (FULL 9 TABS)
 # ==========================================
 @st.cache_data(ttl=5)
 def load_data():
@@ -107,10 +133,8 @@ def load_data():
             return pd.DataFrame(data)
         except: return pd.DataFrame()
 
-    # Load Main Data
+    # 1. Main Data
     df = get_df('Budget Tracking')
-    
-    # Clean Data
     if not df.empty and 'Date' in df.columns:
         df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
         df = df.dropna(subset=['Date'])
@@ -119,7 +143,7 @@ def load_data():
         df['Month'] = df['Date'].dt.month_name()
         df['Amount'] = pd.to_numeric(df['Amount'], errors='coerce').fillna(0)
     
-    # Load Budget
+    # 2. Budget
     budget_raw = get_df('Budget Planning')
     budget_melted = pd.DataFrame()
     if not budget_raw.empty:
@@ -129,64 +153,76 @@ def load_data():
             budget_melted = budget_raw.melt(id_vars=['Category', 'Type'], value_vars=valid_months, var_name='Month', value_name='Amount')
             budget_melted['Amount'] = pd.to_numeric(budget_melted['Amount'], errors='coerce').fillna(0)
 
-    # Return ALL tabs
-    return df, budget_melted, budget_raw, get_df('Credit Cards'), get_df('Loans'), get_df('Physical Assets'), get_df('Splitwise'), get_df('Subscriptions'), get_df('Goals')
+    # Return ALL DataFrames
+    return df, budget_melted, budget_raw, get_df('Credit Cards'), get_df('Loans'), get_df('Physical Assets'), get_df('Splitwise'), get_df('Subscriptions'), get_df('Goals'), get_df('Investments')
 
-# Load data into variables
-df, budget_df, budget_raw_df, cc_df, loan_df, assets_df, split_df, subs_df, goals_df = load_data()
+# Load Data
+df, budget_df, budget_raw_df, cc_df, loan_df, assets_df, split_df, subs_df, goals_df, invest_df = load_data()
 
 # ==========================================
-# 4. SIDEBAR & NAVIGATION
+# 4. SIDEBAR & NAVIGATION (THE "PIC 1" LOOK)
 # ==========================================
-st.sidebar.markdown("## 🎨 Theme")
-if st.sidebar.radio("Mode", ["Light", "Dark"]) == "Dark":
+st.sidebar.title("🎨 App Theme")
+mode = st.sidebar.radio("Select Mode:", ["Light", "Dark Mode"])
+if mode == "Dark Mode":
+    st.session_state['theme'] = 'Dark'
     st.markdown(DARK_THEME, unsafe_allow_html=True)
 else:
+    st.session_state['theme'] = 'Light'
     st.markdown(LIGHT_THEME, unsafe_allow_html=True)
 
 st.sidebar.markdown("---")
-page = st.sidebar.radio("Navigation", ["Main Dashboard", "Budget Planner", "Credit Cards", "Transaction Ledger"])
+st.sidebar.title("🧭 Navigation")
+
+# The Full 9-Item Menu
+page = st.sidebar.radio("Go To Screen", [
+    "🏠 Main Dashboard (I&E)",
+    "💰 Budget Planner",
+    "📈 Investment Tracker",
+    "💳 Credit Cards",
+    "🔄 Subscription Radar",
+    "🤝 Splitwise / Settles",
+    "⚖️ Net Worth & Goals",
+    "📷 AI Bill Scanner",
+    "📝 Transactions"
+])
 
 # ==========================================
 # 5. PAGE: MAIN DASHBOARD
 # ==========================================
-if page == "Main Dashboard":
+if "Main Dashboard" in page:
     st.title("Cloud Command Center")
     
     if df.empty:
-        st.info("👋 Welcome! Your database is connected but empty. Use the sidebar to add your first transaction.")
+        st.info("Your database is connected but empty.")
         ti, te, ts = 0, 0, 0
     else:
         ti = df[df['Type']=='Income']['Amount'].sum()
         te = df[df['Type']=='Expenses']['Amount'].sum()
         ts = df[df['Type']=='Savings']['Amount'].sum()
 
-    # --- KPI CARDS ---
     c1, c2, c3, c4 = st.columns(4)
     with c1: st.markdown(f"<div class='glow-income'><div class='kpi-title' style='color:#00e676'>Income</div><div class='kpi-value'>₹{format_inr(ti)}</div></div>", unsafe_allow_html=True)
     with c2: st.markdown(f"<div class='glow-expenses'><div class='kpi-title' style='color:#ff5252'>Expenses</div><div class='kpi-value'>₹{format_inr(te)}</div></div>", unsafe_allow_html=True)
     with c3: st.markdown(f"<div class='glow-savings'><div class='kpi-title' style='color:#448aff'>Savings</div><div class='kpi-value'>₹{format_inr(ts)}</div></div>", unsafe_allow_html=True)
     with c4: st.markdown(f"<div class='glow-balance'><div class='kpi-title' style='color:#ffd600'>Balance</div><div class='kpi-value'>₹{format_inr(ti-te-ts)}</div></div>", unsafe_allow_html=True)
 
-    # --- MAIN CHARTS ---
     if not df.empty:
-        col1, col2 = st.columns([2, 1])
+        col1, col2 = st.columns([2,1])
         with col1:
-            st.markdown("### 📈 Income vs Expense Trend")
-            daily_trend = df.groupby(['Date', 'Type'])['Amount'].sum().reset_index()
-            fig = px.bar(daily_trend, x='Date', y='Amount', color='Type', barmode='group', 
-                         color_discrete_map={'Income': '#00e676', 'Expenses': '#ff5252', 'Savings': '#448aff'})
-            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_color="white" if st.session_state.theme == 'Dark' else "black")
+            st.markdown("### 📈 Trends")
+            daily = df.groupby(['Date', 'Type'])['Amount'].sum().reset_index()
+            fig = px.bar(daily, x='Date', y='Amount', color='Type', barmode='group', color_discrete_map={'Income':'#00e676', 'Expenses':'#ff5252', 'Savings':'#448aff'})
+            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', font_color="white" if st.session_state.theme == 'Dark' else "black")
             st.plotly_chart(fig, use_container_width=True)
-            
         with col2:
-            st.markdown("### 🍩 Expense Breakdown")
-            exp_data = df[df['Type']=='Expenses'].groupby('Category')['Amount'].sum().reset_index()
-            fig = px.pie(exp_data, values='Amount', names='Category', hole=0.5)
+            st.markdown("### 🍩 Breakdown")
+            exp = df[df['Type']=='Expenses'].groupby('Category')['Amount'].sum().reset_index()
+            fig = px.pie(exp, values='Amount', names='Category', hole=0.5)
             fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', font_color="white" if st.session_state.theme == 'Dark' else "black")
             st.plotly_chart(fig, use_container_width=True)
 
-    # --- QUICK ADD SIDEBAR ---
+    # QUICK ADD
     st.sidebar.markdown("---")
     st.sidebar.subheader("⚡ Quick Add")
     with st.sidebar.form("quick_add"):
@@ -197,101 +233,205 @@ if page == "Main Dashboard":
         if c == "+ New...": c = st.text_input("Name")
         a = st.number_input("Amount", min_value=0.0)
         n = st.text_input("Notes")
-        
-        if st.form_submit_button("🚀 Upload to Cloud"):
-            if a > 0:
-                try:
-                    client = init_connection()
-                    sh = client.open("Finance Tracker")
-                    ws = sh.worksheet('Budget Tracking')
-                    row = [str(datetime.datetime.now().timestamp()), d.strftime("%Y-%m-%d"), t, c, a, n]
-                    ws.append_row(row)
-                    st.success("Saved!")
-                    st.cache_data.clear()
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Cloud Error: {e}")
+        if st.form_submit_button("🚀 Save"):
+            try:
+                client = init_connection()
+                sh = client.open("Finance Tracker")
+                ws = sh.worksheet('Budget Tracking')
+                ws.append_row([str(datetime.datetime.now().timestamp()), d.strftime("%Y-%m-%d"), t, c, a, n])
+                st.success("Saved!"); st.cache_data.clear(); st.rerun()
+            except Exception as e: st.error(f"Error: {e}")
 
 # ==========================================
 # 6. PAGE: BUDGET PLANNER
 # ==========================================
-elif page == "Budget Planner":
-    st.title("🎯 Budget vs Actuals")
-    
+elif "Budget Planner" in page:
+    st.title("🎯 Budget Control")
     if budget_df.empty:
-        st.warning("No Budget Plan found. Please add data to the 'Budget Planning' tab in Google Sheets.")
+        st.warning("Please setup 'Budget Planning' tab in Sheets.")
     else:
-        # Filter Logic
-        all_months = budget_df['Month'].unique()
-        selected_month = st.selectbox("Select Month", all_months, index=len(all_months)-1)
+        month = st.selectbox("Select Month", budget_df['Month'].unique(), index=len(budget_df['Month'].unique())-1)
         
-        # Filter Budget & Actuals
-        budget_filtered = budget_df[budget_df['Month'] == selected_month]
-        actuals_filtered = df[(df['Month'] == selected_month) & (df['Type'] == 'Expenses')]
-        actual_sums = actuals_filtered.groupby('Category')['Amount'].sum().reset_index()
+        bud_fil = budget_df[budget_df['Month'] == month]
+        act_fil = df[(df['Month'] == month) & (df['Type'] == 'Expenses')]
+        act_sum = act_fil.groupby('Category')['Amount'].sum().reset_index()
         
-        # Merge Data
-        merged = pd.merge(budget_filtered, actual_sums, on='Category', how='left', suffixes=('_Budget', '_Actual'))
+        merged = pd.merge(bud_fil, act_sum, on='Category', how='left', suffixes=('_Budget', '_Actual'))
         merged['Amount_Actual'] = merged['Amount_Actual'].fillna(0)
         merged['Variance'] = merged['Amount_Budget'] - merged['Amount_Actual']
         
-        # Display Grid
         st.dataframe(merged[['Category', 'Amount_Budget', 'Amount_Actual', 'Variance']], use_container_width=True)
         
-        # Visualization
         fig = go.Figure(data=[
             go.Bar(name='Budget', x=merged['Category'], y=merged['Amount_Budget'], marker_color='#448aff'),
             go.Bar(name='Actual', x=merged['Category'], y=merged['Amount_Actual'], marker_color='#ff5252')
         ])
-        fig.update_layout(barmode='group', title=f"Budget vs Actual ({selected_month})", 
-                          paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', 
-                          font_color="white" if st.session_state.theme == 'Dark' else "black")
+        fig.update_layout(barmode='group', paper_bgcolor='rgba(0,0,0,0)', font_color="white" if st.session_state.theme == 'Dark' else "black")
         st.plotly_chart(fig, use_container_width=True)
 
 # ==========================================
-# 7. PAGE: CREDIT CARDS
+# 7. PAGE: INVESTMENT TRACKER (RESTORED)
 # ==========================================
-elif page == "Credit Cards":
-    st.title("💳 Credit Card Manager")
+elif "Investment Tracker" in page:
+    st.title("📈 Investment Portfolio")
     
-    if cc_df.empty:
-        st.info("No Credit Card data found.")
+    if not HAS_YFINANCE:
+        st.error("⚠️ Library 'yfinance' is missing. Please add it to requirements.txt")
+    elif invest_df.empty:
+        st.info("Add stocks to 'Investments' tab in Sheets (Ticker, Buy Price, Quantity)")
     else:
-        # Display Cards
-        for index, row in cc_df.iterrows():
-            st.markdown(f"### {row.get('Card Name', 'Unknown Card')}")
-            col1, col2, col3 = st.columns(3)
+        total_inv = 0
+        current_val = 0
+        
+        live_data = []
+        for index, row in invest_df.iterrows():
+            ticker = row.get('Ticker')
+            qty = float(row.get('Quantity', 0))
+            buy_price = float(row.get('Buy Price', 0))
             
-            limit = float(str(row.get('Limit', 0)).replace(',',''))
-            used = float(str(row.get('Used', 0)).replace(',',''))
-            avail = limit - used
-            util = (used / limit) * 100 if limit > 0 else 0
+            try:
+                stock = yf.Ticker(ticker)
+                curr_price = stock.history(period="1d")['Close'].iloc[-1]
+            except:
+                curr_price = buy_price # Fallback
+                
+            invested = qty * buy_price
+            current = qty * curr_price
             
-            with col1: st.metric("Limit", f"₹{format_inr(limit)}")
-            with col2: st.metric("Used", f"₹{format_inr(used)}")
-            with col3: st.metric("Available", f"₹{format_inr(avail)}")
+            total_inv += invested
+            current_val += current
             
-            st.progress(util / 100)
-            st.caption(f"Utilization: {util:.1f}%")
+            live_data.append({
+                "Ticker": ticker, "Qty": qty, "Buy Avg": buy_price, 
+                "CMP": round(curr_price, 2), "Invested": invested, "Current": current,
+                "P&L": current - invested, "P&L %": ((current-invested)/invested)*100 if invested > 0 else 0
+            })
+            
+        inv_final = pd.DataFrame(live_data)
+        
+        c1, c2, c3 = st.columns(3)
+        with c1: st.metric("Total Invested", f"₹{format_inr(total_inv)}")
+        with c2: st.metric("Current Value", f"₹{format_inr(current_val)}", delta=f"{format_inr(current_val-total_inv)}")
+        with c3: st.metric("Returns", f"{((current_val-total_inv)/total_inv)*100:.2f}%")
+        
+        st.dataframe(inv_final.style.format({"P&L %": "{:.2f}%", "CMP": "₹{:.2f}"}), use_container_width=True)
+
+# ==========================================
+# 8. PAGE: CREDIT CARDS
+# ==========================================
+elif "Credit Cards" in page:
+    st.title("💳 Credit Card Manager")
+    if cc_df.empty: st.info("No Data in 'Credit Cards' tab.")
+    else:
+        for i, row in cc_df.iterrows():
+            st.markdown(f"### {row.get('Card Name')}")
+            l = float(str(row.get('Limit',0)).replace(',',''))
+            u = float(str(row.get('Used',0)).replace(',',''))
+            st.progress((u/l) if l > 0 else 0)
+            c1, c2 = st.columns(2)
+            c1.metric("Used", f"₹{format_inr(u)}")
+            c2.metric("Available", f"₹{format_inr(l-u)}")
             st.markdown("---")
 
 # ==========================================
-# 8. PAGE: TRANSACTION LEDGER
+# 9. PAGE: SUBSCRIPTION RADAR
 # ==========================================
-elif page == "Transaction Ledger":
-    st.title("📝 Full Transaction History")
-    
-    # Filters
-    col1, col2 = st.columns(2)
-    with col1: search_txt = st.text_input("🔍 Search Transactions")
-    with col2: type_filter = st.multiselect("Filter Type", df['Type'].unique(), default=df['Type'].unique())
-    
-    # Apply Filters
-    filtered_df = df[df['Type'].isin(type_filter)]
-    if search_txt:
-        filtered_df = filtered_df[
-            filtered_df['Category'].str.contains(search_txt, case=False) | 
-            filtered_df['Details'].str.contains(search_txt, case=False)
-        ]
+elif "Subscription Radar" in page:
+    st.title("🔄 Subscription Radar")
+    if subs_df.empty: st.info("No Data in 'Subscriptions' tab.")
+    else:
+        subs_df['Cost'] = pd.to_numeric(subs_df['Cost'], errors='coerce').fillna(0)
+        monthly = subs_df[subs_df['Frequency']=='Monthly']['Cost'].sum()
+        yearly = subs_df[subs_df['Frequency']=='Yearly']['Cost'].sum()
+        total_monthly_impact = monthly + (yearly/12)
         
-    st.dataframe(filtered_df, use_container_width=True)
+        c1, c2 = st.columns(2)
+        c1.metric("Monthly Burn", f"₹{format_inr(total_monthly_impact)}")
+        c2.metric("Active Subs", len(subs_df))
+        
+        st.dataframe(subs_df, use_container_width=True)
+
+# ==========================================
+# 10. PAGE: SPLITWISE
+# ==========================================
+elif "Splitwise" in page:
+    st.title("🤝 Splitwise / Settlements")
+    if split_df.empty: st.info("No Data in 'Splitwise' tab.")
+    else:
+        split_df['Amount'] = pd.to_numeric(split_df['Amount'], errors='coerce').fillna(0)
+        
+        # Calculate Net Balances
+        balances = {}
+        for i, row in split_df.iterrows():
+            payer = row['Payer']
+            debtor = row['Debtor']
+            amt = row['Amount']
+            
+            balances[payer] = balances.get(payer, 0) + amt
+            balances[debtor] = balances.get(debtor, 0) - amt
+            
+        st.markdown("### 💰 Net Balances")
+        for person, bal in balances.items():
+            if bal > 0: st.success(f"**{person}** gets back ₹{format_inr(bal)}")
+            elif bal < 0: st.error(f"**{person}** owes ₹{format_inr(abs(bal))}")
+            
+        st.markdown("### 📜 Ledger")
+        st.dataframe(split_df, use_container_width=True)
+
+# ==========================================
+# 11. PAGE: NET WORTH & GOALS
+# ==========================================
+elif "Net Worth" in page:
+    st.title("⚖️ Net Worth & Goals")
+    
+    # Assets
+    assets_df['Value'] = pd.to_numeric(assets_df['Value'], errors='coerce').fillna(0)
+    loan_df['Outstanding'] = pd.to_numeric(loan_df['Outstanding'], errors='coerce').fillna(0)
+    
+    total_assets = assets_df['Value'].sum()
+    total_liab = loan_df['Outstanding'].sum()
+    
+    # Add savings/investments to assets
+    savings_balance = df[df['Type']=='Income']['Amount'].sum() - df[df['Type']=='Expenses']['Amount'].sum()
+    total_assets += savings_balance
+    
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Total Assets", f"₹{format_inr(total_assets)}")
+    col2.metric("Total Liabilities", f"₹{format_inr(total_liab)}")
+    col3.metric("Net Worth", f"₹{format_inr(total_assets - total_liab)}")
+    
+    st.markdown("### 🎯 Financial Goals")
+    if not goals_df.empty:
+        goals_df['Target Amount'] = pd.to_numeric(goals_df['Target Amount'], errors='coerce')
+        goals_df['Saved Amount'] = pd.to_numeric(goals_df['Saved Amount'], errors='coerce')
+        
+        for i, row in goals_df.iterrows():
+            st.markdown(f"**{row['Goal Name']}**")
+            prog = (row['Saved Amount'] / row['Target Amount']) if row['Target Amount'] > 0 else 0
+            st.progress(min(prog, 1.0))
+            st.caption(f"₹{format_inr(row['Saved Amount'])} / ₹{format_inr(row['Target Amount'])}")
+
+# ==========================================
+# 12. PAGE: AI BILL SCANNER
+# ==========================================
+elif "AI Bill Scanner" in page:
+    st.title("📷 AI Bill Scanner")
+    st.info("Upload a bill image/PDF to extract details automatically.")
+    
+    uploaded_file = st.file_uploader("Upload Bill", type=['png', 'jpg', 'jpeg', 'pdf'])
+    
+    if uploaded_file and st.button("🔍 Scan with AI"):
+        if not HAS_GENAI:
+            st.error("Library 'google-generativeai' is missing.")
+        else:
+            st.warning("⚠️ You need to add your Gemini API Key in secrets to make this work.")
+            # Placeholder for actual AI logic (requires API Key)
+            st.write("Simulated Extraction:")
+            st.json({"Date": "2024-02-25", "Total": 1250, "Category": "Dining"})
+
+# ==========================================
+# 13. PAGE: TRANSACTIONS
+# ==========================================
+elif "Transactions" in page:
+    st.title("📝 Ledger")
+    st.dataframe(df, use_container_width=True)
