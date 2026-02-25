@@ -155,19 +155,42 @@ def calc_xirr(cash_flows):
     except: return 0.0
 
 # ==========================================
-# 3. DATA LOADER (CLOUD ONLY - NO EXCEL)
+# 3. DATA LOADER (CLOUD CONNECTION & LOAD)
 # ==========================================
+import json
+import os 
+from oauth2client.service_account import ServiceAccountCredentials
+
+# --- PART A: THE CONNECTION ENGINE (Must be first) ---
+@st.cache_resource
+def init_connection():
+    scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+    
+    # CASE 1: Local Laptop (Uses file)
+    if os.path.exists('credentials.json'):
+        creds = ServiceAccountCredentials.from_json_keyfile_name('credentials.json', scope)
+    
+    # CASE 2: Streamlit Cloud (Uses Secrets)
+    else:
+        # This matches the "Copy-Paste" method
+        json_str = st.secrets["gcp_service_account"]["key_content"]
+        creds_dict = json.loads(json_str)
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+        
+    client = gspread.authorize(creds)
+    return client
+
+# --- PART B: THE DATA LOADER (Uses the connection above) ---
 @st.cache_data(ttl=5)
 def load_data():
-    # 1. Connect to Cloud
     try:
-        client = init_connection()
-        sh = client.open("Finance Tracker") # Must match your Google Sheet Name
+        client = init_connection()  # <--- This calls the function above
+        sh = client.open("Finance Tracker")
     except Exception as e:
-        st.error(f"🚨 Cloud Connection Error: {e}")
+        st.error(f"🚨 Connection Error: {e}")
         st.stop()
 
-    # 2. Helper to safely read a tab into a DataFrame
+    # Helper to safely read a tab
     def get_df(worksheet_name):
         try:
             ws = sh.worksheet(worksheet_name)
@@ -175,35 +198,23 @@ def load_data():
             return pd.DataFrame(data)
         except: return pd.DataFrame()
 
-    # 3. Load Main Data
+    # Load Main Data
     df = get_df('Budget Tracking')
     
-    # 4. Clean Data
+    # Clean Data
     if not df.empty and 'Date' in df.columns:
         df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
         df = df.dropna(subset=['Date'])
         df['Year'] = df['Date'].dt.year 
-        df['FY'] = df['Date'].apply(get_financial_year) # Ensure get_financial_year helper exists above
+        df['FY'] = df['Date'].apply(get_financial_year)
         df['Month'] = df['Date'].dt.month_name()
         df['Amount'] = pd.to_numeric(df['Amount'], errors='coerce').fillna(0)
     
-    # 5. Load & Process Budget
+    # Load Budget
     budget_raw = get_df('Budget Planning')
     budget_melted = pd.DataFrame()
     if not budget_raw.empty:
-        # List of months to look for in columns
-        month_cols = ['April','May','June','July','August','September','October','November','December','January','February','March']
-        valid_months = [m for m in month_cols if m in budget_raw.columns]
-        
-        if valid_months:
-            budget_melted = budget_raw.melt(id_vars=['Category', 'Type'], value_vars=valid_months, var_name='Month', value_name='Amount')
-            budget_melted['Amount'] = pd.to_numeric(budget_melted['Amount'], errors='coerce').fillna(0)
-
-    # 6. Return All DataFrames
-    return df, budget_melted, budget_raw, get_df('Credit Cards'), get_df('Loans'), get_df('Physical Assets'), get_df('Splitwise'), get_df('Subscriptions'), get_df('Goals')
-
-# Load the data into variables immediately after defining the function
-df, budget_df, budget_raw_df, cc_df, loan_df, assets_df, split_df, subs_df, goals_df = load_data()
+        month_cols = ['April','May','June','July','August','
 
 
 split_users = set(["Partner"])
@@ -1436,3 +1447,4 @@ if page == "🏠 Main Dashboard (I&E)":
             except Exception as e: 
 
                 st.sidebar.error(f"Error saving data: {e}. Is Excel open?")
+
